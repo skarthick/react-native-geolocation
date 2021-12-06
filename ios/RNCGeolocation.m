@@ -10,6 +10,7 @@
 #import <CoreLocation/CLError.h>
 #import <CoreLocation/CLLocationManager.h>
 #import <CoreLocation/CLLocationManagerDelegate.h>
+#import <CoreLocation/CLHeading.h>
 
 #import <React/RCTAssert.h>
 #import <React/RCTBridge.h>
@@ -150,6 +151,7 @@ RCT_EXPORT_MODULE()
   _usingSignificantChanges ?
   [_locationManager stopMonitoringSignificantLocationChanges] :
   [_locationManager stopUpdatingLocation];
+  [_locationManager stopUpdatingHeading];
 
   _locationManager.delegate = nil;
 }
@@ -180,11 +182,14 @@ RCT_EXPORT_MODULE()
   _locationManager.distanceFilter  = distanceFilter;
   _locationManager.desiredAccuracy = desiredAccuracy;
   _usingSignificantChanges = useSignificantChanges;
+  [_locationManager setDistanceFilter:kCLLocationAccuracyBestForNavigation];
 
   // Start observing location
   _usingSignificantChanges ?
   [_locationManager startMonitoringSignificantLocationChanges] :
   [_locationManager startUpdatingLocation];
+  [_locationManager startUpdatingHeading];
+//    [locationManager startUpdatingHeading];
 }
 
 #pragma mark - Timeout handler
@@ -379,8 +384,46 @@ RCT_EXPORT_METHOD(getCurrentPosition:(RNCGeolocationOptions)options
     _usingSignificantChanges ?
     [_locationManager stopMonitoringSignificantLocationChanges] :
     [_locationManager stopUpdatingLocation];
+    [_locationManager stopUpdatingLocation];
   }
 
+}
+
+-(void)locationManager:(CLLocationManager *)manager didUpdateHeading:(CLHeading *)newHeading{
+    // Create event
+    CLLocation *location = manager.location;
+    _lastLocationEvent = @{
+                           @"coords": @{
+                               @"latitude": @(location.coordinate.latitude),
+                               @"longitude": @(location.coordinate.longitude),
+                               @"altitude": @(location.altitude),
+                               @"accuracy": @(location.horizontalAccuracy),
+                               @"altitudeAccuracy": @(location.verticalAccuracy),
+                               @"heading": @(newHeading.trueHeading),
+                               @"speed": @(location.speed),
+                               },
+                           @"timestamp": @([location.timestamp timeIntervalSince1970] * 1000) // in ms
+                           };
+
+    // Send event
+    if (_observingLocation) {
+      [self sendEventWithName:@"geolocationDidChange" body:_lastLocationEvent];
+    }
+
+    // Fire all queued callbacks
+    for (RNCGeolocationRequest *request in _pendingRequests) {
+      request.successBlock(@[_lastLocationEvent]);
+      [request.timeoutTimer invalidate];
+    }
+    [_pendingRequests removeAllObjects];
+
+    // Stop updating if not observing
+    if (!_observingLocation) {
+      _usingSignificantChanges ?
+      [_locationManager stopMonitoringSignificantLocationChanges] :
+      [_locationManager stopUpdatingLocation];
+      [_locationManager stopUpdatingLocation];
+    }
 }
 
 - (void)locationManager:(CLLocationManager *)manager didFailWithError:(NSError *)error
